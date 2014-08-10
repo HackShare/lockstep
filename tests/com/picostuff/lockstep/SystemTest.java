@@ -8,7 +8,9 @@ import org.junit.Test;
 /**
  * Use this class to drive development of
  * distributed system by simulating
- * all the relevant parts in a multi-threaded environment
+ * all the relevant parts in a multi-threaded environment.
+ * This will help to drive our thread-safety code and get
+ * us thinking about race condition.
  * 
  * @author chenglim
  *
