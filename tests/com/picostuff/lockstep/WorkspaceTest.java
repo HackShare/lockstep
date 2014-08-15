@@ -2,8 +2,7 @@ package com.picostuff.lockstep;
 
 import static org.junit.Assert.*;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
 
 import junit.framework.Assert;
 
@@ -21,26 +20,12 @@ import com.picostuff.lockstep.exception.SaveConflictException;
  */
 public class WorkspaceTest {
 	private Workspace workspace;
-	private List<String> keysAdded;
-	private List<String> keysChanged;
 
 	@Before
 	public void setup() throws Exception {
-		workspace = new Workspace(); // "/a/b" => "mydata"
-		keysAdded = new ArrayList<String>();
-		keysChanged = new ArrayList<String>();
-		workspace.addWorkspaceListener(new WorkspaceListener() {
-			
-			@Override
-			public void itemChangedLocally(String key, WorkspaceItem oldItem) {
-				keysChanged.add(key);
-			}
-			
-			@Override
-			public void itemAddedLocally(String key) {
-				keysAdded.add(key);
-			}
-		});
+		workspace = new Workspace(); 
+		workspace.initFileSet(); // "/a/b" => "mydata"
+		
 	}
 
 	@After
@@ -49,63 +34,54 @@ public class WorkspaceTest {
 	}
 
 	@Test
-	public void startup() throws Exception {
-		workspace.refresh(); // load info about files // TODO: make this async?
-		Assert.assertEquals(0, keysChanged.size());
-		Assert.assertEquals(2, keysAdded.size());
-		Assert.assertEquals("/a",keysAdded.get(0));
-		Assert.assertEquals("/a/b",keysAdded.get(1));
-		WorkspaceItem item = workspace.getItem("/a");
-		Assert.assertTrue(item.isChanged());
-		item = workspace.getItem("/a/b");
-		Assert.assertTrue(item.isChanged());
-		// all items should be changed when first added
-	}
-
-	@Test
-	public void addItemNoConflict() throws Exception {
-		workspace.refresh();
+	public void simultaneousAddNoConflict() throws Exception {
+		Set<String> fileSet = workspace.getFileSet();
+		Assert.assertEquals(2, fileSet.size());
 		
-		// simulate an simultaneous add coming in, which can occur if we start sync without track last remote
+		// simulate a simultaneous add coming in, which can occur if we start sync without tracking last remote
 		// (which means all remote copy of items are treated as a new add
-		workspace.addRemoteItemAndParents("/a/b", "mydata"); // data is the same, so there's no conflict
-		Assert.assertEquals(0, keysChanged.size());
-		Assert.assertEquals(2, keysAdded.size());
-		Assert.assertEquals("/a",keysAdded.get(0));
-		Assert.assertEquals("/a/b",keysAdded.get(1));
-		WorkspaceItem item = workspace.getItem("/a");
-		Assert.assertTrue("check item is not changed", !item.isChanged());
-		item = workspace.getItem("/a/b");
-		Assert.assertTrue("check item is not changed", !item.isChanged());
+		RemoteItemInfo remoteInfo = new RemoteItemInfo("b","mydata");
+		workspace.processItem("/a/b", remoteInfo); // data is the same, so there's no conflict
+		fileSet = workspace.getFileSet();
+		Assert.assertEquals(2, fileSet.size());
+		Assert.assertTrue(fileSet.contains("/a"));
+		Assert.assertTrue(fileSet.contains("/a/b"));
 		
 		// now it is synced up, so a change in data will not result in conflict
-		workspace.updateRemoteItemAndParents("/a/b", "mynewdata",item.getVersion());
-		item = workspace.getItem("/a/b");
-		Assert.assertTrue("check item is not changed", !item.isChanged());
+		remoteInfo = new RemoteItemInfo("b","mynewdata");
+		workspace.processItem("/a/b", remoteInfo); 
+		Assert.assertEquals(2, fileSet.size());
+		Assert.assertTrue(fileSet.contains("/a"));
+		Assert.assertTrue(fileSet.contains("/a/b"));
+
 	}
 
 	@Test
-	public void addItemWithConflict() throws Exception {
-		workspace.refresh();
+	public void simultaneousAddWithConflict() throws Exception {
+		Set<String> fileSet = workspace.getFileSet();
+		Assert.assertEquals(2, fileSet.size());
 		
-		// simulate an simultaneous add coming in, which can occur if we start sync without track last remote
+		// simulate a simultaneous add coming in, which can occur if we start sync without tracking last remote
 		// (which means all remote copy of items are treated as a new add
+		RemoteItemInfo remoteInfo = new RemoteItemInfo("b","mynewdata");
 		try {
-			workspace.addRemoteItemAndParents("/a/b", "mynewdata"); // data is new, so there's conflict
+			workspace.processItem("/a/b", remoteInfo); // data is different, so we expect a conflict
 			fail("Did not have save conflict");
 		} catch (SaveConflictException e) {
-			// on save conflict, we want to reject item and try again
+			// in a conflict, we have to resolve the situation and the simplest is to reject the local copy
 			workspace.rejectLocalItem("/a/b");
-			workspace.addRemoteItemAndParents("/a/b", "mynewdata"); // try again
+			workspace.processItem("/a/b", remoteInfo); // do again
 		}
-		Assert.assertEquals(0, keysChanged.size());
-		Assert.assertEquals(2, keysAdded.size());
-		Assert.assertEquals("/a",keysAdded.get(0));
-		Assert.assertEquals("/a/b",keysAdded.get(1));
-		WorkspaceItem item = workspace.getItem("/a");
-		Assert.assertTrue("check item is not changed", !item.isChanged());
-		item = workspace.getItem("/a/b");
-		Assert.assertTrue("check item is not changed", !item.isChanged());
+		fileSet = workspace.getFileSet();
+		Assert.assertEquals(2, fileSet.size());
+		Assert.assertTrue(fileSet.contains("/a"));
+		Assert.assertTrue(fileSet.contains("/a/b"));
+		
+	}
+	
+	@Test
+	public void simultaneousAddWithDirAsLocalFileConflict() {
+		fail("Not implemented");
 	}
 
 }

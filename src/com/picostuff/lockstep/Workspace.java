@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.TreeSet;
 
 import com.picostuff.lockstep.exception.BadPathException;
 import com.picostuff.lockstep.exception.SaveConflictException;
@@ -17,125 +20,97 @@ import com.picostuff.lockstep.exception.SaveConflictException;
  *
  */
 public class Workspace {
-	private Map<String, WorkspaceItem> items; // TODO: this should be persisted so that we can recover/continue after quitting
-	private List<WorkspaceListener> listeners;
+	
+	private Map<String,String> fileSystem; // simulate files in file system
+	private Map<String, BaseItemInfo> lastUpdatedItems; // TODO: this should be persisted across process restarts
 	
 	public Workspace() {
-		items = new HashMap<String, WorkspaceItem>();
-		listeners = new ArrayList<WorkspaceListener>();
+		fileSystem = new HashMap<String, String>();
+		lastUpdatedItems = new HashMap<String, BaseItemInfo>();
 	}
 	
-	public void addWorkspaceListener(WorkspaceListener listener) {
-		listeners.add(listener);
+	public void initFileSet() {
+		fileSystem.put("/a", null);
+		fileSystem.put("/a/b", "mydata");
 	}
 	
-	public void refresh() throws BadPathException, SaveConflictException {
-		// This is when events of local changes are processed
-		// We want to keep this from running too long, so maybe a separate thread to look at files and queue updates
-		// Being able to watch for changes asynchronously instead of polling would be a plus.
-		refreshLocalItemAndParents("/a/b", "mydata");
+	public Set<String> getFileSet() {
+		Set<String> set = new TreeSet<String>();
+		set.addAll(fileSystem.keySet());
+		return set;
 	}
 	
-	public WorkspaceItem getItem(String key) {
-		return items.get(key);
-	}
-	
-	// This is used to find item changes to add to shared memory
-	public List<String> findNextChangedItems(int max) {
-		// TODO: this can definitely be optimized - maybe maintain an index to changed items
-		int count = 0;
-		List<String> changedItems = new ArrayList<String>();
-		for (String key:items.keySet()) {
-			if (items.get(key).isChanged()) {
-				changedItems.add(key);
-				count++;
-				if (count >= max)
-					break;
+	public void processItem(String key, RemoteItemInfo remoteInfo) throws SaveConflictException, BadPathException {
+		BaseItemInfo baseInfo = lastUpdatedItems.get(key);
+		LocalItemInfo localInfo = getLocalInfo(key);
+		RemoteItemState remoteItemState = RemoteItemState.findState(remoteInfo, baseInfo);
+		LocalItemState localItemState = LocalItemState.findState(localInfo, baseInfo);
+		switch (remoteItemState) {
+		case REMOTE_CHANGED:
+			switch (localItemState) {
+			case LOCAL_UNCHANGED:
+				updateLocalItem(key,remoteInfo, baseInfo);
+				break;
+			case LOCAL_NOTHING:
+				updateLocalItem(key,remoteInfo, baseInfo);
+				break;
 			}
-		}
-		return changedItems;
-	}
-
-	// called for local changes
-	public void refreshLocalItemAndParents(String key, String data) throws BadPathException, SaveConflictException {
-		// TODO: data might just be a pointer to a file
-		WorkspaceItem oldItem = items.get(key);
-		String[] parts = makePathParts(key);
-		addDirs(parts,false);
-		String name = parts[parts.length - 1];
-		WorkspaceItem item = new WorkspaceItem(name,data);
-		if (oldItem == null) {
-			// first time update
-			items.put(key,item);
-			for (WorkspaceListener listener:listeners) {
-				listener.itemAddedLocally(key);
-			}
-			
-		} else {
-			if (!item.getVersion().equals(oldItem.getVersion())) {
-				items.put(key, item);
-				for (WorkspaceListener listener:listeners) {
-					listener.itemChangedLocally(key, oldItem);
+			break;
+		case REMOTE_NEW:
+			switch (localItemState) {
+			case LOCAL_UNCHANGED:
+				updateLocalItem(key,remoteInfo, baseInfo);
+				break;
+			case LOCAL_NOTHING:
+				updateLocalItem(key,remoteInfo, baseInfo);
+				break;
+			case LOCAL_NEW:
+				if (localInfo.getVersion().equals(remoteInfo.getVersion())) {
+					// local is the same as new, so we just need to update our base info
+					updateBaseInfo(key, remoteInfo, baseInfo);
+				} else {
+					throw new SaveConflictException();
 				}
 			}
+			break;
+		default:
+			throw new RuntimeException("Unexpected remote state");  // We should never get here, so that's why it's so drastic
 		}
+	}
+	
+	private LocalItemInfo getLocalInfo(String key) throws BadPathException {
+		String content = fileSystem.get(key); // content is version for now
+		if (content != null) {
+			String[] parts = makePathParts(key);
+			String name = parts[parts.length - 1];
+			LocalItemInfo localInfo = new LocalItemInfo(name,content);
+			return localInfo;
+		} else {
+			return null;
+		}
+	}
+	
+	private void updateBaseInfo(String key, RemoteItemInfo remoteInfo, BaseItemInfo baseInfo) {
+		if (baseInfo == null) {
+			baseInfo = new BaseItemInfo(remoteInfo.getName(),remoteInfo.getVersion());
+		} else {
+			baseInfo.setVersion(remoteInfo.getVersion());
+		}
+		lastUpdatedItems.put(key, baseInfo);
+	}
+	private void updateLocalItem(String key, RemoteItemInfo remoteInfo, BaseItemInfo baseInfo) throws BadPathException, SaveConflictException {
+		String[] parts = makePathParts(key);
+		addDirs(parts);
+		fileSystem.put(key, remoteInfo.getVersion()); // In the real situation, we might have a link to the data and transfer it to the file system
+		updateBaseInfo(key,remoteInfo,baseInfo);
 	}
 	
 	public void rejectLocalItem(String key) {
 		// TODO: save rejected files somehow (maybe) and maybe stop syncing when n rejects exist
 		// TODO: remove/move file
-		items.remove(key);
-	}
-
-	// called for remote add
-	public void addRemoteItemAndParents(String key, String data) throws BadPathException, SaveConflictException {
-		WorkspaceItem oldItem = items.get(key);
-		boolean potentialConflict = (oldItem != null);
-		if (potentialConflict) {
-			processRemoteItemPotentialConflict(key, data, oldItem);
-		}
-		processRemoteItemAndParentsChange(key, data);
-		
-	}
-
-	// called for remote change
-	public void updateRemoteItemAndParents(String key, String data, String oldVersion) throws BadPathException, SaveConflictException {
-		WorkspaceItem oldItem = items.get(key);
-		boolean potentialConflict = (oldItem != null) && (oldItem.isChanged() || !oldItem.getVersion().equals(oldVersion));
-		if (potentialConflict) {
-			processRemoteItemPotentialConflict(key, data, oldItem);
-		}
-		processRemoteItemAndParentsChange(key, data);
-	}
-	
-	// called for remote delete
-	public void deleteRemoteItem(String key, String oldVersion) {
-		// TODO: look for potential conflict before processing
-	}
-
-	public void processRemoteItemAndParentsChange(String key, String data) throws BadPathException, SaveConflictException {
-		String[] parts = makePathParts(key);
-		String name = parts[parts.length - 1];
-		WorkspaceItem item = new WorkspaceItem(name,data);
-		addDirs(parts, true);
-		item.markUpdated(); // this is an update from remote
-		items.put(key,item);
-	}
-
-	public void processRemoteItemPotentialConflict(String key, String data, WorkspaceItem oldItem) throws BadPathException, SaveConflictException {
-		String[] parts = makePathParts(key);
-		String name = parts[parts.length - 1];
-		WorkspaceItem item = new WorkspaceItem(name,data);
-		// we're changing something that's not an old remote version
-		if (item.getVersion().equals(oldItem.getVersion())) {
-			// the local change matched the remote change
-			oldItem.markUpdated();
-			return;
-		} else {
-			// we're updating the wrong version or add when something's there, 
-			// so it's a conflict that needs resolving -- we must reject it first
-			throw new SaveConflictException();
-		}
+		// TODO: consider the case where a parent dir is actually a file and so the file does not actually exist.  That parent file needs to be
+		// the one removed
+		fileSystem.remove(key);
 	}
 
 	private String[] makePathParts(String path) throws BadPathException {
@@ -145,30 +120,22 @@ public class Workspace {
 		return parts;
 	}
 
-	private void addDirs(String[] parts, boolean updated) throws SaveConflictException {
+	private void addDirs(String[] parts) throws SaveConflictException {
+		// this adds to the file system to allow adding new files, but will be reconciled with the distributed system later
 		StringBuilder dirPath = new StringBuilder();
 		for (int i = 0; i < parts.length - 1; i++) {
 			if (!parts[i].equals("")) {
 				// add a dir
 				dirPath.append("/").append(parts[i]);
-				WorkspaceItem item = new WorkspaceItem(parts[i],null);
 				String key = dirPath.toString();
-				if (updated)
-					item.markUpdated(); // this is an update from remote
-				else {
-					// for local adds, we call listeners
-					WorkspaceItem oldItem = items.get(key);
-					if (oldItem == null) {
-						// new dir
-						for (WorkspaceListener listener:listeners) {
-							listener.itemAddedLocally(key);
-						}
-					}
+				String content = fileSystem.get(key);
+				if (content == null) {
+					fileSystem.put(key, null);
+				} else {
+					throw new SaveConflictException();
 				}
-				items.put(key,item);
 			}
 		}
-		
 	}
-	
+		
 }

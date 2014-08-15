@@ -8,7 +8,11 @@ public class RemoteItemInfo {
 		this.name = name;
 		this.version = version;
 	}
-	
+
+	public String getName() {
+		return version;
+	}
+
 	public String getVersion() {
 		return version;
 	}

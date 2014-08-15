@@ -10,5 +10,12 @@ optimization goals
 . Ability to handle large files - minimize load on system as more large files are added.  Unnecessary copying of files and parallelizing of file copy between machines may yield some nice results.
 . Quick startup - when we have a lot of files to sync to an empty local directory, we don't want to be waiting on that sync to finish before we can start pushing changes
 
+developer
+========
+
+If you are looking at this as a developer, this is an eclipse Indigo project and currently does not count on java features beyond Java 5.  
+
+Please start in the tests directory.  It is being coded using TDD, so expect lots of refactoring as the solution materializes.
+
 This code is currently not ready to release.
 

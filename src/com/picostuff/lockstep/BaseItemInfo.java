@@ -18,4 +18,8 @@ public class BaseItemInfo {
 	public String getVersion() {
 		return this.version;
 	}
+	
+	public void setVersion(String version) {
+		this.version = version;
+	}
 }
