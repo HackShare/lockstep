@@ -24,14 +24,9 @@ public class Workspace {
 	private Map<String,String> fileSystem; // simulate files in file system
 	private Map<String, BaseItemInfo> lastUpdatedItems; // TODO: this should be persisted across process restarts
 	
-	public Workspace() {
-		fileSystem = new HashMap<String, String>();
+	public Workspace(Map<String,String> fileSystem) {
+		this.fileSystem = fileSystem;
 		lastUpdatedItems = new HashMap<String, BaseItemInfo>();
-	}
-	
-	public void initFileSet() {
-		fileSystem.put("/a", null);
-		fileSystem.put("/a/b", "mydata");
 	}
 	
 	public Set<String> getFileSet() {
@@ -40,7 +35,8 @@ public class Workspace {
 		return set;
 	}
 	
-	public void processItem(String key, RemoteItemInfo remoteInfo) throws SaveConflictException, BadPathException {
+	public LocalItemInfo processItem(String key, RemoteItemInfo remoteInfo) throws SaveConflictException, BadPathException {
+		// return a local item if we it needs to be processed as an add
 		BaseItemInfo baseInfo = lastUpdatedItems.get(key);
 		LocalItemInfo localInfo = getLocalInfo(key);
 		RemoteItemState remoteItemState = RemoteItemState.findState(remoteInfo, baseInfo);
@@ -51,9 +47,19 @@ public class Workspace {
 			case LOCAL_UNCHANGED:
 				updateLocalItem(key,remoteInfo, baseInfo);
 				break;
+			case LOCAL_CHANGED:
+				if (localInfo.getVersion().equals(remoteInfo.getVersion())) {
+					// local is the same as new, so we just need to update our base info
+					updateBaseInfo(key, remoteInfo, baseInfo);
+				} else {
+					throw new SaveConflictException();
+				}
+				break;
 			case LOCAL_NOTHING:
 				updateLocalItem(key,remoteInfo, baseInfo);
 				break;
+			default:
+				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
 			}
 			break;
 		case REMOTE_NEW:
@@ -71,20 +77,47 @@ public class Workspace {
 				} else {
 					throw new SaveConflictException();
 				}
+				break;
+			default:
+				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
+			}
+			break;
+		case REMOTE_NOTHING:
+			switch (localItemState) {
+			case LOCAL_NEW:
+				return localInfo;
+			default:
+				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
+			}
+			//break;
+		case REMOTE_UNCHANGED:
+			switch (localItemState) {
+			case LOCAL_CHANGED:
+				return localInfo;
+			default:
+				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
+			}
+		case REMOTE_DELETED:
+			switch (localItemState) {
+			case LOCAL_UNCHANGED:
+				removeLocalItem(key);
+				break;
+			default:
+				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
 			}
 			break;
 		default:
-			throw new RuntimeException("Unexpected remote state");  // We should never get here, so that's why it's so drastic
+			throw new RuntimeException("Unexpected remote state: " + remoteItemState);  // We should never get here, so that's why it's so drastic
 		}
+		return null;
 	}
 	
 	private LocalItemInfo getLocalInfo(String key) throws BadPathException {
-		String content = fileSystem.get(key); // content is version for now
-		if (content != null) {
+		if (fileSystem.containsKey(key)) {
+			String content = fileSystem.get(key); // content is version for now
 			String[] parts = makePathParts(key);
 			String name = parts[parts.length - 1];
-			LocalItemInfo localInfo = new LocalItemInfo(name,content);
-			return localInfo;
+			return new LocalItemInfo(name,content); // null content is dir
 		} else {
 			return null;
 		}
@@ -110,7 +143,13 @@ public class Workspace {
 		// TODO: remove/move file
 		// TODO: consider the case where a parent dir is actually a file and so the file does not actually exist.  That parent file needs to be
 		// the one removed
+		fileSystem.remove(key); // in reality, we maybe rename to a rejected filename
+		lastUpdatedItems.remove(key);
+	}
+	
+	public void removeLocalItem(String key) {
 		fileSystem.remove(key);
+		lastUpdatedItems.remove(key);
 	}
 
 	private String[] makePathParts(String path) throws BadPathException {
