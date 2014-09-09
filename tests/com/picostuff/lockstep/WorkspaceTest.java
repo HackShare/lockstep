@@ -28,8 +28,8 @@ public class WorkspaceTest {
 	@Before
 	public void setup() throws Exception {
 		fileSystem = new HashMap<String, String>();
-		fileSystem.put("/a", null);
-		fileSystem.put("/a/b", "mydata");
+		fileSystem.put("/a", null); // dir
+		fileSystem.put("/a/b", "mydata"); // file
 		workspace = new Workspace(fileSystem); 
 		
 		// Verify Initial State: Used to fail early so that we don't waste time running our tests
@@ -58,18 +58,24 @@ public class WorkspaceTest {
 	@Test
 	public void simultaneousAddNoConflict() throws Exception {
 		// simulate a simultaneous add coming in, which can occur if we start sync without tracking last remote
-		// (which means all remote copy of items are treated as a new add
+		// (which means all remote copy of items are treated as a new add)
+		String key = "/a/b";
 		RemoteItemInfo remoteInfo = new RemoteItemInfo("b","mydata");
-		workspace.processItem("/a/b", remoteInfo); // data is the same, so there's no conflict
+		
+		// make sure our local data is what we expect it to be
+		Assert.assertEquals("check local version", "mydata", fileSystem.get(key));
+		
+		// now process the remote item
+		workspace.processItem(key, remoteInfo); // data is the same, so there's no conflict
 		Set<String> fileSet = workspace.getFileSet();
-		Assert.assertEquals(2, fileSet.size());
+		Assert.assertEquals("check local item count", 2, fileSet.size());
 		Assert.assertTrue(fileSet.contains("/a"));
 		Assert.assertTrue(fileSet.contains("/a/b"));
 		
 		// now it is synced up, so a change in data will not result in conflict
 		remoteInfo = new RemoteItemInfo("b","mynewdata");
-		workspace.processItem("/a/b", remoteInfo); 
-		Assert.assertEquals(2, fileSet.size());
+		workspace.processItem(key, remoteInfo); 
+		Assert.assertEquals("check local item count again", 2, fileSet.size());
 		Assert.assertTrue(fileSet.contains("/a"));
 		Assert.assertTrue(fileSet.contains("/a/b"));
 
@@ -78,10 +84,15 @@ public class WorkspaceTest {
 	@Test
 	public void simultaneousAddWithConflict() throws Exception {
 		// simulate a simultaneous add coming in, which can occur if we start sync without tracking last remote
-		// (which means all remote copy of items are treated as a new add
+		// (which means all remote copy of items are treated as a new add)
+		String key = "/a/b";
 		RemoteItemInfo remoteInfo = new RemoteItemInfo("b","mynewdata");
+
+		// make sure our local data is what we expect it to be
+		Assert.assertEquals("check local version", "mydata", fileSystem.get(key));
+
 		try {
-			workspace.processItem("/a/b", remoteInfo); // data is different, so we expect a conflict
+			workspace.processItem(key, remoteInfo); // data is different, so we expect a conflict
 			fail("Did not have save conflict");
 		} catch (SaveConflictException e) {
 			// in a conflict, we have to resolve the situation and the simplest is to reject the local copy
@@ -89,7 +100,7 @@ public class WorkspaceTest {
 			workspace.processItem("/a/b", remoteInfo); // do again
 		}
 		Set<String> fileSet = workspace.getFileSet();
-		Assert.assertEquals(2, fileSet.size());
+		Assert.assertEquals("check local item count", 2, fileSet.size());
 		Assert.assertTrue(fileSet.contains("/a"));
 		Assert.assertTrue(fileSet.contains("/a/b"));
 		
@@ -197,10 +208,10 @@ public class WorkspaceTest {
 		// sync up new workspace
 		syncNewWorkspace();
 		
-		String key = "/a/b";
-		
 		// remote info is changed
+		String key = "/a/b";
 		RemoteItemInfo remoteInfo = new RemoteItemInfo("b","mynewdata");
+		
 		// change local to the something different
 		fileSystem.put(key, "myothernewdata");
 		
@@ -225,9 +236,11 @@ public class WorkspaceTest {
 	public void remoteDeleteNoConflict() throws SaveConflictException, BadPathException {
 		// sync up new workspace
 		syncNewWorkspace();
-		
+
+		String key = "/a/b";
+
 		// change remote and sync
-		workspace.processItem("/a/b", null); // no remote means a delete
+		workspace.processItem(key, null); // no remote means a delete
 		Set<String> fileSet = workspace.getFileSet();
 		Assert.assertEquals("check one item deleted", 1, fileSet.size());
 		Assert.assertTrue(fileSet.contains("/a"));
@@ -240,7 +253,25 @@ public class WorkspaceTest {
 		syncNewWorkspace();
 		
 		// remote delete when local change exists should result in conflict
-		fail("Not complete");
+
+		String key = "/a/b";
+
+		// change local to the something different
+		fileSystem.put(key, "myothernewdata");
+
+		// change remote and sync
+		try {
+			workspace.processItem(key, null); // no remote means a delete
+			fail("Did not have save conflict");
+		} catch (SaveConflictException e) {
+			// in a conflict, we have to resolve the situation and the simplest is to reject the local copy
+			workspace.rejectLocalItem(key);
+			workspace.processItem(key, null); // do again
+		}
+		Set<String> fileSet = workspace.getFileSet();
+		Assert.assertEquals("check one item deleted", 1, fileSet.size());
+		Assert.assertTrue(fileSet.contains("/a"));
+		Assert.assertFalse("check item deleted", fileSet.contains("/a/b"));
 	}
 
 }

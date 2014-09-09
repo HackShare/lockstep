@@ -86,10 +86,14 @@ public class Workspace {
 			switch (localItemState) {
 			case LOCAL_NEW:
 				return localInfo;
+			case LOCAL_NOTHING:
+				// make sure our base info is up to date
+				removeBaseInfo(key);
+				break;
 			default:
 				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
 			}
-			//break;
+			break;
 		case REMOTE_UNCHANGED:
 			switch (localItemState) {
 			case LOCAL_CHANGED:
@@ -97,11 +101,14 @@ public class Workspace {
 			default:
 				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
 			}
+			//break;
 		case REMOTE_DELETED:
 			switch (localItemState) {
 			case LOCAL_UNCHANGED:
 				removeLocalItem(key);
 				break;
+			case LOCAL_CHANGED:
+				throw new SaveConflictException();
 			default:
 				throw new RuntimeException("Unexpected local state: " + localItemState);  // We should never get here, so that's why it's so drastic
 			}
@@ -144,11 +151,15 @@ public class Workspace {
 		// TODO: consider the case where a parent dir is actually a file and so the file does not actually exist.  That parent file needs to be
 		// the one removed
 		fileSystem.remove(key); // in reality, we maybe rename to a rejected filename
-		lastUpdatedItems.remove(key);
+		lastUpdatedItems.remove(key); // the file is considered last deleted (since we can't recover what it was before and so we can accept whatever it currently is remotely)
 	}
 	
 	public void removeLocalItem(String key) {
 		fileSystem.remove(key);
+		removeBaseInfo(key);
+	}
+	
+	private void removeBaseInfo(String key) {
 		lastUpdatedItems.remove(key);
 	}
 
